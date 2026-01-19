@@ -39,7 +39,7 @@ if (!localStorage.getItem("posts")) {
     {
       title: "Hello",
       content: "Hai this is Ilan, you will see this when you first open this! you can delete this and add a new post! Bai",
-      image: "",
+      image: "https://preview.redd.it/help-me-find-drawing-meme-of-little-guy-staring-at-camera-v0-4ikeup3sps7d1.jpeg?width=640&crop=smart&auto=webp&s=7721df58b1e9b155b17fb01e085e36de7f806435",
       date: new Date().toDateString()
     }
   ]);
@@ -137,6 +137,7 @@ function createBubble() {
 }
 
 setInterval(createBubble, 800);
+
 
 
 
