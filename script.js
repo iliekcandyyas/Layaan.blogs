@@ -1,3 +1,5 @@
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 
 import {
   getFirestore,
@@ -155,5 +157,6 @@ async function likePost(postId) {
     likes: increment(1)
   });
 }
+
 
 
