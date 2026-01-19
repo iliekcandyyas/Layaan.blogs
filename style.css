@@ -107,3 +107,12 @@ button:active {
   margin-top: 10px;
   background-color: #ff6b9e;
 }
+
+.post button {
+  background-color: #ff6b9e;
+  color: white;
+  border-radius: 25px;
+  padding: 8px 14px;
+  margin-top: 10px;
+  font-size: 1rem;
+}
