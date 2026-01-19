@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Layaan’s Sigma cool blog</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+  </head>
+
+  <body>
+    <header>
+      <h1 id="secretTitle">Layaan’s Little goon Corner hehe..</h1>
+      <p>A place for where Layaan can goon to mommies or just do random stuff</p>
+    </header>
+
+    <!-- POSTS ONLY -->
+    <main id="posts"></main>
+
+    <!-- ADMIN PANEL (SEPARATE, SAFE FROM DELETION) -->
+    <div id="adminPanel" style="display:none;">
+      <h2>Add New Post ✍️</h2>
+
+      <input id="postTitle" placeholder="Post title"><br><br>
+      <input id="imageUrl" placeholder="Image URL (optional)"><br><br>
+      <textarea id="postContent" placeholder="Write your post here"></textarea><br><br>
+
+      <button onclick="addPost()">Post</button>
+    </div>
+
+    <footer>
+      <p>Made with 💗 by a very cool friend</p>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
+
