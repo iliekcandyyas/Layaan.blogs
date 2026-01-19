@@ -85,6 +85,13 @@ async function addPost() {
   contentInput.value = "";
   imageInput.value = "";
 
+  await addDoc(collection(db, "posts"), {
+  title,
+  content,
+  image,
+  date: new Date().toDateString(),
+  likes: 0
+  });
   loadPosts();
 }
 
@@ -126,5 +133,14 @@ function createBubble() {
 
 setInterval(createBubble, 800);
 
+import { doc, updateDoc, increment } from
+"https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
+
+async function likePost(postId) {
+  const postRef = doc(db, "posts", postId);
+  await updateDoc(postRef, {
+    likes: increment(1)
+  });
+}
 
 
