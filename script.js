@@ -38,7 +38,7 @@ if (!localStorage.getItem("posts")) {
   savePosts([
     {
       title: "Hello",
-      content: "test",
+      content: "Hai this is Ilan, you will see this when you first open this! you can delete this and add a new post! Bai",
       image: "",
       date: new Date().toDateString()
     }
@@ -137,5 +137,6 @@ function createBubble() {
 }
 
 setInterval(createBubble, 800);
+
 
 
