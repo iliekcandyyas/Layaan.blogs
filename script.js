@@ -6,16 +6,17 @@ import {
   getFirestore,
   collection,
   addDoc,
-  getDocs,
   deleteDoc,
   doc,
   updateDoc,
   increment,
   query,
   orderBy,
-  serverTimestamp
+  serverTimestamp,
+  onSnapshot
 } from
 "https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
+
 
 // 🔹 FIREBASE SETUP
 const firebaseConfig = {
@@ -57,38 +58,39 @@ title.addEventListener("click", () => {
 });
 
 // 🔹 LOAD POSTS
-async function loadPosts() {
-  postsContainer.innerHTML = "";
-
+function loadPosts() {
   const q = query(
     collection(db, "posts"),
     orderBy("created", "desc")
   );
 
-  const snapshot = await getDocs(q);
+  onSnapshot(q, (snapshot) => {
+    postsContainer.innerHTML = "";
 
-  snapshot.forEach((docSnap) => {
-    const post = docSnap.data();
+    snapshot.forEach((docSnap) => {
+      const post = docSnap.data();
 
-    const article = document.createElement("article");
-    article.className = "post";
+      const article = document.createElement("article");
+      article.className = "post";
 
-    article.innerHTML = `
-      <h2>${post.title}</h2>
-      <p class="date">${post.created?.toDate().toDateString() || ""}</p>
-      ${post.image ? `<img src="${post.image}">` : ""}
-      <p>${post.content}</p>
+      article.innerHTML = `
+        <h2>${post.title}</h2>
+        <p class="date">${post.created?.toDate().toDateString() || ""}</p>
+        ${post.image ? `<img src="${post.image}">` : ""}
+        <p>${post.content}</p>
 
-      <button onclick="likePost('${docSnap.id}')">
-        💖 ${post.likes || 0}
-      </button>
+        <button onclick="likePost('${docSnap.id}')">
+          💗 ${post.likes || 0}
+        </button>
 
-      ${isAdmin ? `<button onclick="deletePost('${docSnap.id}')">Delete</button>` : ""}
-    `;
+        ${isAdmin ? `<button onclick="deletePost('${docSnap.id}')">Delete</button>` : ""}
+      `;
 
-    postsContainer.appendChild(article);
+      postsContainer.appendChild(article);
+    });
   });
 }
+
 
 // 🔹 ADD POST
 window.addPost = async function () {
