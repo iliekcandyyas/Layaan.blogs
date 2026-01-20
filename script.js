@@ -1,3 +1,4 @@
+// 🔹 IMPORTS (TOP ONLY)
 import { initializeApp } from
 "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
 
@@ -6,12 +7,17 @@ import {
   collection,
   addDoc,
   getDocs,
+  deleteDoc,
   doc,
   updateDoc,
   increment,
-  deleteDoc
+  query,
+  orderBy,
+  serverTimestamp
 } from
 "https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
+
+// 🔹 FIREBASE SETUP
 const firebaseConfig = {
   apiKey: "AIzaSyDtXJPC8kFLQ--LcRNAQ_FeIdJRsSnkVj0",
   authDomain: "layaan-blogs.firebaseapp.com",
@@ -21,10 +27,10 @@ const firebaseConfig = {
   appId: "1:873328011340:web:aae62fc25f217d60726ce9"
 };
 
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-/*************** ADMIN MODE ***************/
+// 🔹 ADMIN MODE
 const PASSWORD = "layan123";
 let clickCount = 0;
 let isAdmin = false;
@@ -50,37 +56,42 @@ title.addEventListener("click", () => {
   }
 });
 
-/*************** LOAD POSTS (FROM FIREBASE) ***************/
+// 🔹 LOAD POSTS
 async function loadPosts() {
   postsContainer.innerHTML = "";
 
-  const snapshot = await db
-    .collection("posts")
-    .orderBy("created", "desc")
-    .get();
+  const q = query(
+    collection(db, "posts"),
+    orderBy("created", "desc")
+  );
 
-  snapshot.forEach(doc => {
-    const post = doc.data();
+  const snapshot = await getDocs(q);
+
+  snapshot.forEach((docSnap) => {
+    const post = docSnap.data();
+
     const article = document.createElement("article");
     article.className = "post";
 
     article.innerHTML = `
       <h2>${post.title}</h2>
-      <p class="date">${new Date(post.created.seconds * 1000).toDateString()}</p>
+      <p class="date">${post.created?.toDate().toDateString() || ""}</p>
       ${post.image ? `<img src="${post.image}">` : ""}
       <p>${post.content}</p>
-      <button onclick="likePost('${doc.id}')">
-      💖 ${post.likes || 0}
+
+      <button onclick="likePost('${docSnap.id}')">
+        💖 ${post.likes || 0}
       </button>
-      ${isAdmin ? `<button onclick="deletePost('${doc.id}')">Delete</button>` : ""}
+
+      ${isAdmin ? `<button onclick="deletePost('${docSnap.id}')">Delete</button>` : ""}
     `;
 
     postsContainer.appendChild(article);
   });
 }
 
-/*************** ADD POST (FIREBASE) ***************/
-async function addPost() {
+// 🔹 ADD POST
+window.addPost = async function () {
   const titleInput = document.getElementById("postTitle");
   const contentInput = document.getElementById("postContent");
   const imageInput = document.getElementById("imageUrl");
@@ -90,52 +101,45 @@ async function addPost() {
     return;
   }
 
-  await db.collection("posts").add({
+  await addDoc(collection(db, "posts"), {
     title: titleInput.value,
     content: contentInput.value,
     image: imageInput.value,
-    created: firebase.firestore.FieldValue.serverTimestamp()
+    created: serverTimestamp(),
+    likes: 0
   });
 
   titleInput.value = "";
   contentInput.value = "";
   imageInput.value = "";
-  
-  await addDoc(collection(db, "posts"), {
-  title,
-  content,
-  image,
-  date: new Date().toDateString(),
-  likes: 0
-  });
 
   loadPosts();
-}
+};
 
-/*************** DELETE POST ***************/
-async function deletePost(id) {
+// 🔹 DELETE POST
+window.deletePost = async function (id) {
   if (!confirm("Delete this post?")) return;
 
-  await db.collection("posts").doc(id).delete();
+  await deleteDoc(doc(db, "posts", id));
   loadPosts();
-}
+};
 
-/*************** LOAD ON PAGE START ***************/
+// 🔹 LIKE POST
+window.likePost = async function (id) {
+  const ref = doc(db, "posts", id);
+  await updateDoc(ref, {
+    likes: increment(1)
+  });
+};
+
+// 🔹 LOAD ON START
 loadPosts();
 
-/*************** BUBBLES + SOUNDS ***************/
+// 🔹 BUBBLES + SOUNDS
 const sounds = {
   pop: new Audio("pop.mp3"),
   fahh: new Audio("fahh.mp3")
 };
-
-function playSound(name) {
-  if (sounds[name]) {
-    sounds[name].pause();
-    sounds[name].currentTime = 0;
-    sounds[name].play();
-  }
-}
 
 function createBubble() {
   const bubble = document.createElement("div");
@@ -151,12 +155,6 @@ function createBubble() {
 setInterval(createBubble, 800);
 
 
-async function likePost(postId) {
-  const postRef = doc(db, "posts", postId);
-  await updateDoc(postRef, {
-    likes: increment(1)
-  });
-}
 
 
 
