@@ -127,12 +127,19 @@ window.deletePost = async function (id) {
 };
 
 // 🔹 LIKE POST
+const likedPosts = new Set();
+
 window.likePost = async function (id) {
+  if (likedPosts.has(id)) return;
+
+  likedPosts.add(id);
+
   const ref = doc(db, "posts", id);
   await updateDoc(ref, {
     likes: increment(1)
   });
 };
+
 
 // 🔹 LOAD ON START
 loadPosts();
@@ -155,6 +162,7 @@ function createBubble() {
 }
 
 setInterval(createBubble, 800);
+
 
 
 
