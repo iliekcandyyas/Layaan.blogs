@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hand Gesture Door</title>
+
+<!--
+  ============================================================
+  THE STACK:
+  1. MediaPipe Hands  — ML model that finds your hand landmarks
+  2. Camera Utils     — helper to pipe webcam into MediaPipe
+  3. Vanilla Canvas   — we draw everything ourselves
+  ============================================================
+-->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    color: #fff;
+    font-family: 'Share Tech Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 16px;
+  }
+
+  h1 {
+    font-size: 13px;
+    letter-spacing: 0.3em;
+    color: #555;
+    text-transform: uppercase;
+  }
+
+  #stage {
+    position: relative;
+    width: 640px;
+    height: 480px;
+    border: 1px solid #1a1a2e;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+
+  /* Hidden video — MediaPipe reads from this, we don't show it */
+  #webcam {
+    display: none;
+  }
+
+  /* This canvas shows the scene (door, particles, etc.) */
+  #scene {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+
+  /* This canvas shows the hand skeleton overlay */
+  #overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  #hud {
+    position: absolute;
+    top: 12px; left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  #gesture-label {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: #0cf;
+    text-shadow: 0 0 8px #0cf;
+    min-height: 16px;
+  }
+
+  #hold-bar-wrap {
+    width: 120px;
+    height: 3px;
+    background: #1a1a2e;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  #hold-bar {
+    height: 100%;
+    width: 0%;
+    background: #0cf;
+    box-shadow: 0 0 6px #0cf;
+    transition: background 0.3s;
+    border-radius: 2px;
+  }
+
+  #guide {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 24px;
+  }
+
+  .gesture-hint {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: #444;
+  }
+
+  .gesture-hint span:first-child {
+    font-size: 22px;
+  }
+
+  #status {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: #333;
+  }
+</style>
+</head>
+<body>
+
+<h1>✦ gesture control demo ✦</h1>
+
+<div id="stage">
+  <video id="webcam" playsinline></video>
+  <canvas id="scene" width="640" height="480"></canvas>
+  <canvas id="overlay" width="640" height="480"></canvas>
+
+  <div id="hud">
+    <div id="gesture-label">WAITING FOR HAND...</div>
+    <div id="hold-bar-wrap">
+      <div id="hold-bar"></div>
+    </div>
+  </div>
+
+  <div id="guide">
+    <div class="gesture-hint"><span>✊</span><span>CLOSE DOOR</span></div>
+    <div class="gesture-hint"><span>🖐</span><span>OPEN DOOR</span></div>
+    <div class="gesture-hint"><span>☝</span><span>KNOCK</span></div>
+  </div>
+</div>
+
+<div id="status">loading mediapipe...</div>
+
+<script>
+// ============================================================
+// PART 1: CANVAS SETUP
+// We have two canvases stacked on top of each other:
+//   - scene:   draws the door and effects
+//   - overlay: draws the hand skeleton so you can see landmarks
+// ============================================================
+
+const sceneCanvas = document.getElementById('scene');
+const sc = sceneCanvas.getContext('2d');
+
+const overlayCanvas = document.getElementById('overlay');
+const oc = overlayCanvas.getContext('2d');
+
+const W = 640, H = 480;
+
+
+// ============================================================
+// PART 2: DOOR STATE
+// The door is just two rectangles that slide apart.
+// doorOpen goes from 0 (closed) to 1 (fully open).
+// We animate it smoothly each frame.
+// ============================================================
+
+let doorOpen = 0;       // 0 = closed, 1 = fully open
+let doorTarget = 0;     // what we're animating toward
+let particles = [];     // sparks/dust when door moves
+let knockAnim = 0;      // shake animation when you knock
+
+
+// ============================================================
+// PART 3: GESTURE STATE
+// We track the current gesture and how long it's been held.
+// Once held long enough, we trigger the action.
+// ============================================================
+
+let currentGesture = 'NONE';
+let holdFrames = 0;
+const HOLD_THRESHOLD = 40;   // frames to hold before triggering (~1.3 sec at 30fps)
+let lastTriggered = '';
+
+
+// ============================================================
+// PART 4: GESTURE DETECTION
+//
+// MediaPipe gives us 21 landmarks per hand, each with x, y, z.
+// x and y are 0..1 (normalized to frame size).
+//
+// Landmark indices for fingers:
+//   Thumb:  1-2-3-4      (4 = tip)
+//   Index:  5-6-7-8      (8 = tip)
+//   Middle: 9-10-11-12   (12 = tip)
+//   Ring:   13-14-15-16  (16 = tip)
+//   Pinky:  17-18-19-20  (20 = tip)
+//   Wrist:  0
+//
+// KEY TRICK: if tip.y < knuckle.y, the finger is pointing UP
+// (because y=0 is the top of the screen)
+// ============================================================
+
+function isFingerUp(lm, tip, mid) {
+  // lm = landmarks array, tip = tip index, mid = middle-knuckle index
+  return lm[tip].y < lm[mid].y;
+}
+
+function detectGesture(landmarks) {
+  const lm = landmarks;
+
+  // Check each finger (tip index, pip/middle-knuckle index)
+  const thumb  = isFingerUp(lm, 4, 3);
+  const index  = isFingerUp(lm, 8, 6);
+  const middle = isFingerUp(lm, 12, 10);
+  const ring   = isFingerUp(lm, 16, 14);
+  const pinky  = isFingerUp(lm, 20, 18);
+
+  const upCount = [thumb, index, middle, ring, pinky].filter(Boolean).length;
+
+  // OPEN HAND: all 5 fingers up
+  if (upCount >= 4) return 'OPEN';
+
+  // FIST: all fingers down
+  if (upCount === 0) return 'FIST';
+
+  // POINT: only index up
+  if (index && !middle && !ring && !pinky) return 'POINT';
+
+  // PEACE: index + middle up
+  if (index && middle && !ring && !pinky) return 'PEACE';
+
+  return 'OTHER';
+}
+
+
+// ============================================================
+// PART 5: WHAT EACH GESTURE DOES
+// This is the fun part — map gestures to actions.
+// ============================================================
+
+function triggerAction(gesture) {
+  if (gesture === 'OPEN') {
+    doorTarget = 1;      // open the door
+    spawnDustParticles();
+  }
+  if (gesture === 'FIST') {
+    doorTarget = 0;      // close the door
+    spawnDustParticles();
+  }
+  if (gesture === 'POINT') {
+    knockAnim = 15;      // shake the door (knock knock)
+    spawnKnockParticles();
+  }
+}
+
+
+// ============================================================
+// PART 6: PARTICLES
+// Simple particle system — each particle has position,
+// velocity, life counter, and a color.
+// ============================================================
+
+function spawnDustParticles() {
+  const doorX = W / 2;
+  for (let i = 0; i < 30; i++) {
+    particles.push({
+      x: doorX + (Math.random() - 0.5) * 20,
+      y: H * 0.3 + Math.random() * H * 0.4,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -Math.random() * 2 - 0.5,
+      life: 40 + Math.random() * 40,
+      maxLife: 80,
+      color: `hsl(${180 + Math.random()*40}, 80%, 70%)`,
+      size: 1.5 + Math.random() * 2,
+    });
+  }
+}
+
+function spawnKnockParticles() {
+  const doorX = W / 2;
+  for (let i = 0; i < 15; i++) {
+    particles.push({
+      x: doorX + (Math.random() - 0.5) * 60,
+      y: H * 0.45 + (Math.random() - 0.5) * 40,
+      vx: (Math.random() - 0.5) * 5,
+      vy: -Math.random() * 3,
+      life: 30 + Math.random() * 20,
+      maxLife: 50,
+      color: `hsl(${40 + Math.random()*20}, 90%, 70%)`,
+      size: 2 + Math.random() * 3,
+    });
+  }
+}
+
+
+// ============================================================
+// PART 7: DRAWING THE SCENE
+// Every frame we clear and redraw everything from scratch.
+// This is the standard "game loop" approach.
+// ============================================================
+
+function drawScene() {
+  // --- BACKGROUND ---
+  sc.fillStyle = '#0a0a0f';
+  sc.fillRect(0, 0, W, H);
+
+  // Subtle floor line
+  sc.strokeStyle = '#1a1a2e';
+  sc.lineWidth = 1;
+  sc.beginPath();
+  sc.moveTo(0, H * 0.8);
+  sc.lineTo(W, H * 0.8);
+  sc.stroke();
+
+  // --- DOOR FRAME ---
+  const doorW = 160;
+  const doorH = 260;
+  const doorX = W / 2 - doorW / 2;
+  const doorY = H * 0.8 - doorH;
+
+  // Knock shake offset
+  const shakeX = knockAnim > 0 ? Math.sin(knockAnim * 1.2) * 4 : 0;
+  if (knockAnim > 0) knockAnim--;
+
+  // Door frame (the surround)
+  sc.strokeStyle = '#2a2a3e';
+  sc.lineWidth = 8;
+  sc.strokeRect(doorX + shakeX - 8, doorY - 8, doorW + 16, doorH + 16);
+
+  // --- THE TWO DOOR PANELS ---
+  // doorOpen (0..1) controls how far apart they slide.
+  // At 0: both halves meet in the middle (door closed).
+  // At 1: both halves are flush with the frame edges (door open).
+  const halfW = doorW / 2;
+  const slideAmount = halfW * doorOpen;
+
+  // Left panel — slides LEFT
+  const leftPanelX = doorX + shakeX - slideAmount;
+  drawDoorPanel(sc, leftPanelX, doorY, halfW, doorH, 'left');
+
+  // Right panel — slides RIGHT
+  const rightPanelX = doorX + shakeX + halfW + slideAmount;
+  drawDoorPanel(sc, rightPanelX, doorY, halfW, doorH, 'right');
+
+  // --- WHAT'S BEHIND THE DOOR ---
+  // Only visible when door is open
+  if (doorOpen > 0.05) {
+    const gapLeft  = doorX + shakeX + halfW - slideAmount;
+    const gapRight = doorX + shakeX + halfW + slideAmount;
+    const gapWidth = gapRight - gapLeft;
+
+    // Clip to the gap so the portal doesn't bleed outside
+    sc.save();
+    sc.beginPath();
+    sc.rect(gapLeft, doorY, gapWidth, doorH);
+    sc.clip();
+
+    // Portal glow
+    const grad = sc.createRadialGradient(
+      W/2 + shakeX, doorY + doorH/2, 0,
+      W/2 + shakeX, doorY + doorH/2, doorH * 0.7
+    );
+    grad.addColorStop(0, `rgba(0, 200, 255, ${doorOpen * 0.9})`);
+    grad.addColorStop(0.5, `rgba(0, 50, 120, ${doorOpen * 0.7})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    sc.fillStyle = grad;
+    sc.fillRect(gapLeft, doorY, gapWidth, doorH);
+
+    // Stars behind the door
+    sc.fillStyle = `rgba(255,255,255,${doorOpen * 0.8})`;
+    for (let i = 0; i < 40; i++) {
+      // Use deterministic positions so stars don't flicker
+      const sx = gapLeft + ((i * 73 + 17) % gapWidth);
+      const sy = doorY + ((i * 97 + 31) % doorH);
+      sc.beginPath();
+      sc.arc(sx, sy, 0.8 + (i % 3) * 0.4, 0, Math.PI * 2);
+      sc.fill();
+    }
+
+    sc.restore();
+  }
+
+  // --- PARTICLES ---
+  particles = particles.filter(p => p.life > 0);
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.05; // gravity
+    p.life--;
+
+    const alpha = p.life / p.maxLife;
+    sc.globalAlpha = alpha;
+    sc.fillStyle = p.color;
+    sc.beginPath();
+    sc.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+    sc.fill();
+  }
+  sc.globalAlpha = 1;
+
+  // --- ANIMATE DOOR ---
+  // Lerp (linear interpolate) smoothly toward target
+  doorOpen += (doorTarget - doorOpen) * 0.06;
+}
+
+function drawDoorPanel(ctx, x, y, w, h, side) {
+  // Panel body
+  const panelGrad = ctx.createLinearGradient(x, y, x + w, y);
+  if (side === 'left') {
+    panelGrad.addColorStop(0, '#1a1a2a');
+    panelGrad.addColorStop(1, '#252535');
+  } else {
+    panelGrad.addColorStop(0, '#252535');
+    panelGrad.addColorStop(1, '#1a1a2a');
+  }
+  ctx.fillStyle = panelGrad;
+  ctx.fillRect(x, y, w, h);
+
+  // Panel border
+  ctx.strokeStyle = '#333355';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+
+  // Inset rectangle detail (decorative)
+  const margin = 10;
+  ctx.strokeStyle = '#2a2a44';
+  ctx.strokeRect(x + margin, y + margin, w - margin*2, h - margin*2);
+
+  // Door handle (only on the inner edge)
+  const handleX = side === 'left' ? x + w - 14 : x + 10;
+  const handleY = y + h * 0.5;
+  ctx.fillStyle = '#555577';
+  ctx.beginPath();
+  ctx.roundRect(handleX, handleY - 12, 6, 24, 3);
+  ctx.fill();
+}
+
+
+// ============================================================
+// PART 8: DRAWING THE HAND SKELETON (overlay canvas)
+// We draw lines between landmarks so you can see what
+// MediaPipe is detecting. This is purely visual / debug.
+// ============================================================
+
+// These are the connections between landmarks that form the hand skeleton
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],         // thumb
+  [0,5],[5,6],[6,7],[7,8],         // index
+  [0,9],[9,10],[10,11],[11,12],    // middle
+  [0,13],[13,14],[14,15],[15,16],  // ring
+  [0,17],[17,18],[18,19],[19,20],  // pinky
+  [5,9],[9,13],[13,17],            // palm
+];
+
+function drawHandSkeleton(landmarks) {
+  oc.clearRect(0, 0, W, H);
+
+  // Mirror the x coords because webcam is mirrored
+  const pts = landmarks.map(lm => ({
+    x: (1 - lm.x) * W,
+    y: lm.y * H,
+  }));
+
+  // Draw connections
+  oc.strokeStyle = 'rgba(0, 200, 255, 0.6)';
+  oc.lineWidth = 2;
+  for (const [a, b] of HAND_CONNECTIONS) {
+    oc.beginPath();
+    oc.moveTo(pts[a].x, pts[a].y);
+    oc.lineTo(pts[b].x, pts[b].y);
+    oc.stroke();
+  }
+
+  // Draw landmark dots
+  for (let i = 0; i < pts.length; i++) {
+    oc.beginPath();
+    oc.arc(pts[i].x, pts[i].y, i === 0 ? 5 : 3, 0, Math.PI * 2);
+    // Fingertips glow brighter
+    const isTip = [4, 8, 12, 16, 20].includes(i);
+    oc.fillStyle = isTip ? '#fff' : 'rgba(0,200,255,0.8)';
+    oc.fill();
+  }
+}
+
+
+// ============================================================
+// PART 9: MEDIAPIPE SETUP
+// We create a Hands instance, configure it, then feed it
+// each webcam frame via the Camera utility.
+// ============================================================
+
+const gestureLabel = document.getElementById('gesture-label');
+const holdBar = document.getElementById('hold-bar');
+const statusEl = document.getElementById('status');
+
+const hands = new Hands({
+  locateFile: (file) =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,          // we only care about one hand
+  modelComplexity: 1,      // 0 = fast, 1 = accurate
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5,
+});
+
+// This callback fires every frame MediaPipe processes
+hands.onResults((results) => {
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const landmarks = results.multiHandLandmarks[0];
+
+    // Draw the skeleton
+    drawHandSkeleton(landmarks);
+
+    // Detect what gesture it is
+    const gesture = detectGesture(landmarks);
+    currentGesture = gesture;
+
+    // Update hold counter
+    if (gesture !== 'NONE' && gesture !== 'OTHER') {
+      holdFrames++;
+      gestureLabel.textContent = gesture;
+
+      // Update hold progress bar
+      const progress = Math.min(100, (holdFrames / HOLD_THRESHOLD) * 100);
+      holdBar.style.width = progress + '%';
+
+      // Trigger once we've held long enough
+      if (holdFrames === HOLD_THRESHOLD && gesture !== lastTriggered) {
+        triggerAction(gesture);
+        lastTriggered = gesture;
+      }
+    } else {
+      // Reset if gesture changed or no clear gesture
+      holdFrames = 0;
+      lastTriggered = '';
+      holdBar.style.width = '0%';
+      gestureLabel.textContent = gesture === 'OTHER' ? 'UNRECOGNIZED' : gesture;
+    }
+
+  } else {
+    // No hand detected
+    oc.clearRect(0, 0, W, H);
+    gestureLabel.textContent = 'NO HAND DETECTED';
+    holdFrames = 0;
+    holdBar.style.width = '0%';
+  }
+});
+
+// Start the webcam and pipe frames into MediaPipe
+const video = document.getElementById('webcam');
+
+const camera = new Camera(video, {
+  onFrame: async () => {
+    await hands.send({ image: video });
+  },
+  width: 640,
+  height: 480,
+});
+
+camera.start().then(() => {
+  statusEl.textContent = '● live — show your hand to the camera';
+  statusEl.style.color = '#0c6';
+}).catch(err => {
+  statusEl.textContent = '✕ camera error: ' + err.message;
+  statusEl.style.color = '#f44';
+});
+
+
+// ============================================================
+// PART 10: THE MAIN LOOP
+// requestAnimationFrame runs this ~60 times per second.
+// We just keep redrawing the scene.
+// ============================================================
+
+function loop() {
+  drawScene();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
