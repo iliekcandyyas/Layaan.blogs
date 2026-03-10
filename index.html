@@ -1,0 +1,337 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hand Gesture Door (Fixed)</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<style>
+body{
+background:#0a0a0f;
+color:white;
+font-family:monospace;
+display:flex;
+flex-direction:column;
+align-items:center;
+justify-content:center;
+min-height:100vh;
+gap:12px;
+}
+
+#stage{
+position:relative;
+width:640px;
+height:480px;
+border:1px solid #222;
+}
+
+#webcam{display:none;}
+
+canvas{
+position:absolute;
+top:0;
+left:0;
+}
+
+#gesture-label{
+position:absolute;
+top:10px;
+left:10px;
+font-size:14px;
+}
+
+#hold-bar-wrap{
+position:absolute;
+top:30px;
+left:10px;
+width:120px;
+height:4px;
+background:#222;
+}
+
+#hold-bar{
+height:100%;
+width:0%;
+background:#0cf;
+}
+</style>
+</head>
+
+<body>
+
+<h3>Gesture Door Demo</h3>
+
+<div id="stage">
+
+<video id="webcam" playsinline></video>
+
+<canvas id="scene" width="640" height="480"></canvas>
+<canvas id="overlay" width="640" height="480"></canvas>
+
+<div id="gesture-label">WAITING...</div>
+
+<div id="hold-bar-wrap">
+<div id="hold-bar"></div>
+</div>
+
+</div>
+
+<div id="status">loading mediapipe...</div>
+
+
+<script>
+
+const sceneCanvas=document.getElementById("scene");
+const sc=sceneCanvas.getContext("2d");
+
+const overlayCanvas=document.getElementById("overlay");
+const oc=overlayCanvas.getContext("2d");
+
+const gestureLabel=document.getElementById("gesture-label");
+const holdBar=document.getElementById("hold-bar");
+const statusEl=document.getElementById("status");
+
+const W=640,H=480;
+
+
+
+/* DOOR STATE */
+
+let doorOpen=0;
+let doorTarget=0;
+let knockAnim=0;
+
+
+
+/* GESTURE STATE */
+
+let previousGesture="NONE";
+let holdFrames=0;
+let lastTriggered="";
+
+const HOLD_THRESHOLD=40;
+
+
+
+/* GESTURE DETECTION */
+
+function isFingerUp(lm,tip,mid){
+return lm[tip].y < lm[mid].y;
+}
+
+function detectGesture(lm){
+
+const thumb=isFingerUp(lm,4,3);
+const index=isFingerUp(lm,8,6);
+const middle=isFingerUp(lm,12,10);
+const ring=isFingerUp(lm,16,14);
+const pinky=isFingerUp(lm,20,18);
+
+const upCount=[thumb,index,middle,ring,pinky].filter(Boolean).length;
+
+if(upCount>=4) return "OPEN";
+if(upCount===0) return "FIST";
+if(index && !middle && !ring && !pinky) return "POINT";
+
+return "OTHER";
+
+}
+
+
+
+/* ACTIONS */
+
+function triggerAction(gesture){
+
+if(gesture==="OPEN"){
+doorTarget=1;
+}
+
+if(gesture==="FIST"){
+doorTarget=0;
+}
+
+if(gesture==="POINT"){
+knockAnim=15;
+}
+
+}
+
+
+
+/* DRAW SCENE */
+
+function drawScene(){
+
+sc.fillStyle="#0a0a0f";
+sc.fillRect(0,0,W,H);
+
+const doorW=160;
+const doorH=260;
+
+const doorX=W/2-doorW/2;
+const doorY=H*0.8-doorH;
+
+const shakeX=knockAnim>0?Math.sin(knockAnim)*5:0;
+if(knockAnim>0)knockAnim--;
+
+sc.strokeStyle="#333";
+sc.lineWidth=6;
+sc.strokeRect(doorX-6+shakeX,doorY-6,doorW+12,doorH+12);
+
+const half=doorW/2;
+const slide=half*doorOpen;
+
+sc.fillStyle="#222";
+
+sc.fillRect(doorX-slide+shakeX,doorY,half,doorH);
+sc.fillRect(doorX+half+slide+shakeX,doorY,half,doorH);
+
+doorOpen += (doorTarget-doorOpen)*0.08;
+
+}
+
+
+
+/* HAND DRAW */
+
+const HAND_CONNECTIONS=[
+[0,1],[1,2],[2,3],[3,4],
+[0,5],[5,6],[6,7],[7,8],
+[0,9],[9,10],[10,11],[11,12],
+[0,13],[13,14],[14,15],[15,16],
+[0,17],[17,18],[18,19],[19,20]
+];
+
+function drawHandSkeleton(lm){
+
+oc.clearRect(0,0,W,H);
+
+const pts=lm.map(p=>({
+x:(1-p.x)*W,
+y:p.y*H
+}));
+
+oc.strokeStyle="#0cf";
+
+for(const [a,b] of HAND_CONNECTIONS){
+
+oc.beginPath();
+oc.moveTo(pts[a].x,pts[a].y);
+oc.lineTo(pts[b].x,pts[b].y);
+oc.stroke();
+
+}
+
+}
+
+
+
+/* MEDIAPIPE */
+
+const hands=new Hands({
+locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+maxNumHands:1,
+modelComplexity:1,
+minDetectionConfidence:0.7,
+minTrackingConfidence:0.5
+});
+
+
+hands.onResults((results)=>{
+
+if(results.multiHandLandmarks && results.multiHandLandmarks.length){
+
+const lm=results.multiHandLandmarks[0];
+
+drawHandSkeleton(lm);
+
+const gesture=detectGesture(lm);
+
+
+/* RESET TIMER IF GESTURE CHANGED */
+
+if(gesture!==previousGesture){
+holdFrames=0;
+}
+
+previousGesture=gesture;
+
+
+if(gesture!=="OTHER"){
+
+holdFrames++;
+
+gestureLabel.textContent=gesture;
+
+let progress=Math.min(100,(holdFrames/HOLD_THRESHOLD)*100);
+holdBar.style.width=progress+"%";
+
+if(holdFrames>=HOLD_THRESHOLD && gesture!==lastTriggered){
+
+triggerAction(gesture);
+lastTriggered=gesture;
+
+}
+
+}else{
+
+holdFrames=0;
+lastTriggered="";
+holdBar.style.width="0%";
+
+}
+
+}else{
+
+oc.clearRect(0,0,W,H);
+gestureLabel.textContent="NO HAND";
+
+holdFrames=0;
+holdBar.style.width="0%";
+
+}
+
+});
+
+
+
+/* CAMERA */
+
+const video=document.getElementById("webcam");
+
+const camera=new Camera(video,{
+onFrame:async()=>{
+await hands.send({image:video});
+},
+width:640,
+height:480
+});
+
+camera.start().then(()=>{
+statusEl.textContent="camera live";
+}).catch(e=>{
+statusEl.textContent="camera error";
+});
+
+
+
+/* LOOP */
+
+function loop(){
+drawScene();
+requestAnimationFrame(loop);
+}
+
+loop();
+
+</script>
+
+</body>
+</html>
